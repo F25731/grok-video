@@ -7,3 +7,5 @@ services:
     env_file: .env
     ports:
       - "${HOST_PORT:-19484}:8080"
+    volumes:
+      - ./data:/data

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,7 +14,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.cfg.UpstreamAPIKey == "" {
+	if s.runtime.Get().UpstreamAPIKey == "" {
 		writeError(w, http.StatusInternalServerError, "upstream api key is not configured")
 		return
 	}
@@ -28,9 +29,14 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 	defer cancel()
-	created, _, err := s.client.Create(ctx, req)
+	var created upstreamCreateResp
+	err = s.pool.Run(ctx, func() error {
+		var createErr error
+		created, _, createErr = s.client.Create(ctx, req)
+		return createErr
+	})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writePoolError(w, err)
 		return
 	}
 	s.tasks.Store(created.TaskID, req.Model)
@@ -64,9 +70,14 @@ func (s *Server) pollVideo(w http.ResponseWriter, r *http.Request, taskID string
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.HTTPTimeout)
 	defer cancel()
-	task, _, err := s.client.Poll(ctx, taskID)
+	var task upstreamTask
+	err := s.pool.Run(ctx, func() error {
+		var pollErr error
+		task, _, pollErr = s.client.Poll(ctx, taskID)
+		return pollErr
+	})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writePoolError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toOpenAIFromTask(task, s.modelForTask(taskID)))
@@ -84,18 +95,28 @@ func (s *Server) videoContent(w http.ResponseWriter, r *http.Request, taskID str
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.HTTPTimeout)
 	defer cancel()
-	task, _, err := s.client.Poll(ctx, taskID)
+	var task upstreamTask
+	err := s.pool.Run(ctx, func() error {
+		var pollErr error
+		task, _, pollErr = s.client.Poll(ctx, taskID)
+		return pollErr
+	})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writePoolError(w, err)
 		return
 	}
 	if strings.ToUpper(task.Status) != "SUCCESS" || strings.TrimSpace(task.ResultURL) == "" {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("task is not completed, current status: %s", task.Status))
 		return
 	}
-	resp, err := s.client.FetchContent(ctx, task.ResultURL)
+	var resp *http.Response
+	err = s.pool.Run(ctx, func() error {
+		var fetchErr error
+		resp, fetchErr = s.client.FetchContent(ctx, task.ResultURL)
+		return fetchErr
+	})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writePoolError(w, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -112,6 +133,14 @@ func (s *Server) videoContent(w http.ResponseWriter, r *http.Request, taskID str
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func writePoolError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errQueueFull) {
+		writeError(w, http.StatusTooManyRequests, err.Error())
+		return
+	}
+	writeError(w, http.StatusBadGateway, err.Error())
 }
 
 func (s *Server) modelForTask(taskID string) string {

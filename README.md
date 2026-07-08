@@ -1,8 +1,18 @@
 # Grok Video Wrapper
 
-NewAPI 上游 wrapper，先接入 Google 文档里的 `https://api.119337.xyz` Grok 视频接口。
+给 NewAPI 使用的 Grok 视频中转 wrapper，当前接入 `https://api.119337.xyz` 的视频任务接口。
 
-## 对 NewAPI 暴露
+## 后台
+
+启动后打开：
+
+```text
+http://服务器:19484/admin
+```
+
+后台可配置上游 API Key，并查看 NewAPI 接入信息、模型列表和 worker 状态。上游密钥保存到 `/data/config.json`，保存后下一次请求立即生效，不需要重启容器。
+
+## 暴露给 NewAPI
 
 ```text
 GET  /v1/models
@@ -11,7 +21,7 @@ GET  /v1/videos/{task_id}
 GET  /v1/videos/{task_id}/content
 ```
 
-额外保留便于测试的入口，返回仍是 OpenAI Video 结构：
+额外保留测试入口：
 
 ```text
 POST /v1/video/generations
@@ -20,7 +30,7 @@ GET  /v1/video/generations/{task_id}
 
 ## NewAPI 后台配置
 
-渠道类型选择 `OpenAI`，不要选其它视频专用渠道。
+渠道类型选择 `OpenAI`：
 
 ```text
 Base URL: http://你的wrapper地址/v1
@@ -39,13 +49,24 @@ API Key: WRAPPER_API_KEY
 
 ## 计费和失败退款
 
-这个 wrapper 按 NewAPI 原生异步任务模式工作：
+wrapper 使用 NewAPI 原生异步任务模式：
 
 - 创建任务成功后立即返回 `queued` 和上游 `task_id`。
-- NewAPI 保存任务并按自己的任务轮询逻辑查询 `/v1/videos/{task_id}`。
+- NewAPI 保存任务，并按自己的任务轮询逻辑查询 `/v1/videos/{task_id}`。
 - 上游成功时 wrapper 返回 `status: "completed"`。
 - 上游失败时 wrapper 返回 `status: "failed"` 和 `error.message`，NewAPI 的异步失败逻辑会退款。
-- NewAPI 获取视频内容时会请求 `/v1/videos/{task_id}/content`，wrapper 会从上游 `result_url` 拉取并转发 mp4。
+- NewAPI 获取视频内容时请求 `/v1/videos/{task_id}/content`，wrapper 从上游 `result_url` 拉取并转发 mp4。
+
+## 并发
+
+默认配置：
+
+```env
+MAX_WORKERS=2000
+MAX_QUEUE=50000
+```
+
+创建任务、轮询任务、下载视频内容都会经过 worker 池。队列满时返回 429。
 
 ## 上游模型规则
 
@@ -67,10 +88,4 @@ API Key: WRAPPER_API_KEY
 ```bash
 cp .env.example .env
 docker compose up -d --build
-```
-
-默认宿主机端口是 `19484`，可在 `.env` 里加：
-
-```env
-HOST_PORT=19484
 ```

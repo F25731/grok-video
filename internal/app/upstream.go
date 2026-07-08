@@ -14,12 +14,13 @@ import (
 )
 
 type UpstreamClient struct {
-	cfg        Config
-	httpClient *http.Client
+	cfg         Config
+	runtime     *RuntimeConfigStore
+	httpClient  *http.Client
 }
 
-func NewUpstreamClient(cfg Config) *UpstreamClient {
-	return &UpstreamClient{cfg: cfg, httpClient: &http.Client{Timeout: cfg.HTTPTimeout}}
+func NewUpstreamClient(cfg Config, runtime *RuntimeConfigStore) *UpstreamClient {
+	return &UpstreamClient{cfg: cfg, runtime: runtime, httpClient: &http.Client{Timeout: cfg.HTTPTimeout}}
 }
 
 func (c *UpstreamClient) Create(ctx context.Context, req videoRequest) (upstreamCreateResp, []byte, error) {
@@ -102,7 +103,7 @@ func (c *UpstreamClient) FetchContent(ctx context.Context, url string) (*http.Re
 }
 
 func (c *UpstreamClient) setHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+c.cfg.UpstreamAPIKey)
+	req.Header.Set("Authorization", "Bearer "+c.runtime.Get().UpstreamAPIKey)
 	req.Header.Set("Content-Type", "application/json")
 }
 

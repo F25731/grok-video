@@ -2,21 +2,32 @@ package app
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 )
 
 type Server struct {
-	cfg    Config
-	client *UpstreamClient
-	tasks  sync.Map
+	cfg     Config
+	runtime *RuntimeConfigStore
+	client  *UpstreamClient
+	pool    *WorkerPool
+	tasks   sync.Map
 }
 
 func NewServer(cfg Config) http.Handler {
-	s := &Server{cfg: cfg, client: NewUpstreamClient(cfg)}
+	runtime, err := NewRuntimeConfigStore(cfg)
+	if err != nil {
+		log.Fatalf("load runtime config failed: %v", err)
+	}
+	s := &Server{cfg: cfg, runtime: runtime, client: NewUpstreamClient(cfg, runtime), pool: NewWorkerPool(cfg.MaxWorkers, cfg.MaxQueue)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.health)
+	mux.HandleFunc("/admin", s.adminPage)
+	mux.HandleFunc("/api/admin/login", s.adminLogin)
+	mux.HandleFunc("/api/admin/config", s.withAdminAuth(s.adminConfig))
+	mux.HandleFunc("/api/admin/status", s.withAdminAuth(s.adminStatus))
 	mux.HandleFunc("/v1/models", s.withAuth(s.models))
 	mux.HandleFunc("/v1/videos", s.withAuth(s.createVideo))
 	mux.HandleFunc("/v1/videos/", s.withAuth(s.videoByID))
