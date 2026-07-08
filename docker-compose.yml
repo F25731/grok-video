@@ -1,0 +1,9 @@
+services:
+  grok-video-wrapper:
+    build: .
+    image: grok-video-wrapper:local
+    container_name: grok-video-wrapper
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${HOST_PORT:-19484}:8080"
