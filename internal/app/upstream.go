@@ -53,13 +53,13 @@ func (c *UpstreamClient) Create(ctx context.Context, req videoRequest) (upstream
 	if err := json.Unmarshal(respBody, &out); err != nil {
 		return upstreamCreateResp{}, respBody, err
 	}
-	if out.TaskID == "" {
+	if out.TaskID.String() == "" {
 		out.TaskID = out.ID
 	}
-	if out.ID == "" {
+	if out.ID.String() == "" {
 		out.ID = out.TaskID
 	}
-	if out.TaskID == "" {
+	if out.TaskID.String() == "" {
 		return upstreamCreateResp{}, respBody, fmt.Errorf("upstream response missing task_id")
 	}
 	return out, respBody, nil
@@ -85,8 +85,8 @@ func (c *UpstreamClient) Poll(ctx context.Context, taskID string) (upstreamTask,
 		return upstreamTask{}, respBody, err
 	}
 	if strings.EqualFold(out.Code, "success") || out.Code == "" {
-		if out.Data.TaskID == "" {
-			out.Data.TaskID = taskID
+		if out.Data.TaskID.String() == "" {
+			out.Data.TaskID = upstreamID(taskID)
 		}
 		return out.Data, respBody, nil
 	}
@@ -110,8 +110,8 @@ func (c *UpstreamClient) setHeaders(req *http.Request) {
 func toOpenAIFromCreate(req videoRequest, created upstreamCreateResp) openAIVideo {
 	progress := progressInt(created.Progress)
 	return openAIVideo{
-		ID:        created.TaskID,
-		TaskID:    created.TaskID,
+		ID:        created.TaskID.String(),
+		TaskID:    created.TaskID.String(),
 		Object:    "video",
 		Model:     req.Model,
 		Status:    "queued",
@@ -128,8 +128,8 @@ func toOpenAIFromTask(task upstreamTask, model string) openAIVideo {
 	status := strings.ToUpper(task.Status)
 	resultURL := task.ResultURLValue()
 	video := openAIVideo{
-		ID:        task.TaskID,
-		TaskID:    task.TaskID,
+		ID:        task.TaskID.String(),
+		TaskID:    task.TaskID.String(),
 		Object:    "video",
 		Model:     model,
 		Status:    "in_progress",
@@ -140,8 +140,8 @@ func toOpenAIFromTask(task upstreamTask, model string) openAIVideo {
 		},
 	}
 	if video.ID == "" {
-		video.ID = task.ID
-		video.TaskID = task.ID
+		video.ID = task.ID.String()
+		video.TaskID = task.ID.String()
 	}
 	switch status {
 	case "SUCCESS":
