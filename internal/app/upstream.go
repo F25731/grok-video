@@ -158,7 +158,11 @@ func toOpenAIFromTask(task upstreamTask, model string) openAIVideo {
 		video.CompletedAt = time.Now().Unix()
 		video.Error = &videoError{Message: firstNonEmpty(task.FailReason, task.ErrorMessage, "task failed"), Code: "upstream_failed"}
 	case "SUBMITTED", "QUEUED", "NOT_START":
-		video.Status = "queued"
+		if video.Progress > 0 {
+			video.Status = "in_progress"
+		} else {
+			video.Status = "queued"
+		}
 	case "IN_PROGRESS", "PROCESSING", "RUNNING":
 		video.Status = "in_progress"
 	}
