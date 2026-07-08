@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
@@ -39,8 +40,10 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		writePoolError(w, err)
 		return
 	}
-	s.tasks.Store(created.TaskID, req.Model)
-	writeJSON(w, http.StatusOK, toOpenAIFromCreate(req, created))
+	video := toOpenAIFromCreate(req, created)
+	s.tasks.Create(video)
+	go s.watchTask(created.TaskID)
+	writeJSON(w, http.StatusOK, video)
 }
 
 func (s *Server) videoGenerationByID(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +83,9 @@ func (s *Server) pollVideo(w http.ResponseWriter, r *http.Request, taskID string
 		writePoolError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toOpenAIFromTask(task, s.modelForTask(taskID)))
+	video := toOpenAIFromTask(task, s.modelForTask(taskID))
+	s.tasks.Update(video)
+	writeJSON(w, http.StatusOK, video)
 }
 
 func (s *Server) videoContent(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -124,6 +129,7 @@ func (s *Server) videoContent(w http.ResponseWriter, r *http.Request, taskID str
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("video url returned status %d", resp.StatusCode))
 		return
 	}
+	s.tasks.SetContentFetched(taskID)
 	for key, values := range resp.Header {
 		for _, value := range values {
 			w.Header().Add(key, value)
@@ -144,10 +150,33 @@ func writePoolError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) modelForTask(taskID string) string {
-	if value, ok := s.tasks.Load(taskID); ok {
-		if model, ok := value.(string); ok && strings.TrimSpace(model) != "" {
-			return model
+	return s.tasks.ModelFor(taskID)
+}
+
+func (s *Server) watchTask(taskID string) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	deadline := time.After(s.cfg.RequestTimeout)
+	for {
+		select {
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPTimeout)
+			task, _, err := s.client.Poll(ctx, taskID)
+			cancel()
+			if err != nil {
+				continue
+			}
+			video := toOpenAIFromTask(task, s.modelForTask(taskID))
+			s.tasks.Update(video)
+			if video.Status == "completed" || video.Status == "failed" {
+				return
+			}
+		case <-deadline:
+			return
 		}
 	}
-	return "grok-video"
 }

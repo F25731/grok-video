@@ -38,12 +38,12 @@ API Key: WRAPPER_API_KEY
 模型: grok-image-video,grok-video-1.5
 ```
 
-模型价格在 NewAPI 的 `ModelPrice` 里按次配置，例如：
+NewAPI 当前会按视频请求里的 `seconds` 参与计费；如果希望“每次生成”固定价格，需要把这里的单价按预计秒数折算成每秒价。例如希望 4 秒视频总价 0.35，则模型价格填 0.0875。
 
 ```json
 {
-  "grok-image-video": 0.35,
-  "grok-video-1.5": 0.45
+  "grok-image-video": 0.0875,
+  "grok-video-1.5": 0.1125
 }
 ```
 
@@ -53,6 +53,7 @@ wrapper 使用 NewAPI 原生异步任务模式：
 
 - 创建任务成功后立即返回 `queued` 和上游 `task_id`。
 - NewAPI 保存任务，并按自己的任务轮询逻辑查询 `/v1/videos/{task_id}`。
+- wrapper 后台也会用同一个上游 `task_id` 自动轮询，实时展示总任务、排队中、运行中、完成、失败和最近任务列表；worker 完成数只表示 HTTP 工作执行次数，不再作为任务完成数展示。
 - 上游成功时 wrapper 返回 `status: "completed"`。
 - 上游失败时 wrapper 返回 `status: "failed"` 和 `error.message`，NewAPI 的异步失败逻辑会退款。
 - NewAPI 获取视频内容时请求 `/v1/videos/{task_id}/content`，wrapper 从上游 `result_url` 拉取并转发 mp4。

@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 type Server struct {
@@ -13,7 +12,7 @@ type Server struct {
 	runtime *RuntimeConfigStore
 	client  *UpstreamClient
 	pool    *WorkerPool
-	tasks   sync.Map
+	tasks   *TaskStore
 }
 
 func NewServer(cfg Config) http.Handler {
@@ -21,7 +20,7 @@ func NewServer(cfg Config) http.Handler {
 	if err != nil {
 		log.Fatalf("load runtime config failed: %v", err)
 	}
-	s := &Server{cfg: cfg, runtime: runtime, client: NewUpstreamClient(cfg, runtime), pool: NewWorkerPool(cfg.MaxWorkers, cfg.MaxQueue)}
+	s := &Server{cfg: cfg, runtime: runtime, client: NewUpstreamClient(cfg, runtime), pool: NewWorkerPool(cfg.MaxWorkers, cfg.MaxQueue), tasks: NewTaskStore()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.health)
 	mux.HandleFunc("/admin", s.adminPage)

@@ -104,6 +104,8 @@ func (s *Server) adminStatus(w http.ResponseWriter, r *http.Request) {
 		"ok":                      true,
 		"upstream_key_configured": cfg.UpstreamAPIKey != "",
 		"worker":                  s.pool.Stats(),
+		"tasks":                   s.tasks.Stats(),
+		"recent_tasks":            s.tasks.Recent(20),
 	})
 }
 
@@ -152,7 +154,7 @@ const adminHTML = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Grok Video Wrapper 后台</title>
   <style>
-    *{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}.wrap{max-width:1080px;margin:0 auto;padding:28px 18px 48px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.title{font-size:24px;font-weight:750}.sub{color:#687386;font-size:13px;margin-top:5px}.grid{display:grid;grid-template-columns:1.05fr .95fr;gap:16px}.card{background:#fff;border:1px solid #e6ebf2;border-radius:10px;padding:18px;box-shadow:0 8px 24px rgba(20,35,60,.06)}h2{font-size:16px;margin:0 0 14px}.row{display:grid;gap:8px;margin:12px 0}label{font-size:13px;color:#475569}input{width:100%;height:40px;border:1px solid #d8e0ea;border-radius:8px;padding:0 11px;font-size:14px;background:#fff}button{height:40px;border:0;border-radius:8px;background:#111827;color:#fff;padding:0 16px;font-weight:650;cursor:pointer}button.secondary{background:#edf1f7;color:#172033}.actions{display:flex;gap:10px;flex-wrap:wrap}.kv{display:grid;grid-template-columns:150px 1fr;gap:9px 12px;font-size:14px}.k{color:#687386}.v{word-break:break-all}.ok{color:#087443;font-weight:700}.bad{color:#c02626;font-weight:700}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:#f8fafc;border:1px solid #edf1f7;border-radius:8px;padding:12px}.num{font-size:20px;font-weight:760}.name{font-size:12px;color:#687386;margin-top:3px}.model{border:1px solid #edf1f7;border-radius:8px;padding:12px;margin-top:10px;background:#fbfcfe}.model b{display:block;margin-bottom:7px}.tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:3px 8px;font-size:12px;margin:3px 4px 0 0}.login{max-width:420px;margin:90px auto}.hide{display:none}.msg{font-size:13px;margin-top:10px}.hint{background:#f8fafc;border:1px solid #edf1f7;border-radius:8px;padding:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all}@media(max-width:820px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.kv{grid-template-columns:1fr}}
+    *{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}.wrap{max-width:1080px;margin:0 auto;padding:28px 18px 48px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.title{font-size:24px;font-weight:750}.sub{color:#687386;font-size:13px;margin-top:5px}.grid{display:grid;grid-template-columns:1.05fr .95fr;gap:16px}.card{background:#fff;border:1px solid #e6ebf2;border-radius:10px;padding:18px;box-shadow:0 8px 24px rgba(20,35,60,.06)}.wide{grid-column:1/-1}h2{font-size:16px;margin:0 0 14px}.row{display:grid;gap:8px;margin:12px 0}label{font-size:13px;color:#475569}input{width:100%;height:40px;border:1px solid #d8e0ea;border-radius:8px;padding:0 11px;font-size:14px;background:#fff}button{height:40px;border:0;border-radius:8px;background:#111827;color:#fff;padding:0 16px;font-weight:650;cursor:pointer}button.secondary{background:#edf1f7;color:#172033}.actions{display:flex;gap:10px;flex-wrap:wrap}.kv{display:grid;grid-template-columns:150px 1fr;gap:9px 12px;font-size:14px}.k{color:#687386}.v{word-break:break-all}.ok{color:#087443;font-weight:700}.bad{color:#c02626;font-weight:700}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:#f8fafc;border:1px solid #edf1f7;border-radius:8px;padding:12px}.num{font-size:20px;font-weight:760}.name{font-size:12px;color:#687386;margin-top:3px}.model{border:1px solid #edf1f7;border-radius:8px;padding:12px;margin-top:10px;background:#fbfcfe}.model b{display:block;margin-bottom:7px}.tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:3px 8px;font-size:12px;margin:3px 4px 0 0}.taskHead,.taskRow{display:grid;grid-template-columns:minmax(220px,1.6fr) minmax(140px,.8fr) 100px 70px 60px;gap:10px;align-items:center}.taskHead{color:#687386;font-size:12px;padding:8px 10px}.taskRow{border-top:1px solid #edf1f7;font-size:13px;padding:10px}.taskRow span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.login{max-width:420px;margin:90px auto}.hide{display:none}.msg{font-size:13px;margin-top:10px}.hint{background:#f8fafc;border:1px solid #edf1f7;border-radius:8px;padding:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all}@media(max-width:820px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.kv{grid-template-columns:1fr}.taskHead{display:none}.taskRow{grid-template-columns:1fr;gap:4px}}
   </style>
 </head>
 <body>
@@ -187,12 +189,17 @@ const adminHTML = `<!doctype html>
         <div class="hint" id="newapiHint"></div>
       </section>
       <section class="card">
-        <h2>worker 状态</h2>
+        <h2>任务状态</h2>
         <div class="stats" id="stats"></div>
+        <div class="sub" id="workerHint"></div>
       </section>
       <section class="card">
         <h2>支持模型</h2>
         <div id="models"></div>
+      </section>
+      <section class="card wide">
+        <h2>最近任务</h2>
+        <div id="tasks"></div>
       </section>
     </div>
   </main>
@@ -220,7 +227,8 @@ const adminHTML = `<!doctype html>
         $('keyState').innerHTML = cfg.upstream_key_configured ? '<span class="ok">已配置</span>' : '<span class="bad">未配置</span>';
         $('keyMasked').textContent = cfg.upstream_key_masked || '-';
         $('newapiHint').textContent = '渠道类型: OpenAI\nBase URL: '+location.origin+'/v1\nAPI Key: '+(cfg.wrapper_api_key || '(未设置 WRAPPER_API_KEY)')+'\n模型: grok-image-video,grok-video-1.5';
-        renderStats(status.worker || {});
+        renderStats(status.tasks || {}, status.worker || {});
+        renderTasks(status.recent_tasks || []);
         renderModels(cfg.models || []);
       }catch(e){
         $('app').classList.add('hide'); $('login').classList.remove('hide');
@@ -235,14 +243,24 @@ const adminHTML = `<!doctype html>
         await refreshAll();
       }catch(e){$('saveMsg').className = 'msg bad'; $('saveMsg').textContent = e.message}
     }
-    function renderStats(worker){
-      const items = [['workers','worker'],['queue','队列容量'],['queued','排队中'],['active','运行中'],['completed','完成'],['failed','失败'],['rejected','拒绝']];
-      $('stats').innerHTML = items.map(([k,n])=>'<div class="stat"><div class="num">'+(worker[k] ?? 0)+'</div><div class="name">'+n+'</div></div>').join('');
+    function renderStats(tasks, worker){
+      const items = [['total','总任务'],['queued','排队中'],['in_progress','运行中'],['completed','完成'],['failed','失败']];
+      $('stats').innerHTML = items.map(([k,n])=>'<div class="stat"><div class="num">'+(tasks[k] ?? 0)+'</div><div class="name">'+n+'</div></div>').join('');
+      $('workerHint').textContent = 'worker '+(worker.workers ?? 0)+'；队列 '+(worker.queued ?? 0)+' / '+(worker.queue ?? 0)+'；拒绝 '+(worker.rejected ?? 0)+'。worker 完成数只代表 HTTP 工作次数，不代表任务数量。';
+    }
+    function renderTasks(list){
+      if(!list.length){$('tasks').innerHTML = '<div class="sub">暂无任务</div>'; return}
+      $('tasks').innerHTML = '<div class="taskHead"><span>任务</span><span>模型</span><span>状态</span><span>进度</span><span>轮询</span></div>'+list.map(t=>{
+        const cls = t.status === 'completed' ? 'ok' : t.status === 'failed' ? 'bad' : '';
+        return '<div class="taskRow"><span title="'+esc(t.id)+'">'+esc(t.id)+'</span><span>'+esc(t.model || '-')+'</span><span class="'+cls+'">'+esc(t.status || '-')+'</span><span>'+Number(t.progress || 0)+'%</span><span>'+Number(t.polls || 0)+'</span></div>';
+      }).join('');
     }
     function renderModels(list){
       $('models').innerHTML = list.map(m=>'<div class="model"><b>'+m.id+'</b><div>参考图: '+m.max_images+' 张；最长: '+m.max_seconds+' 秒</div><div>'+m.ratios.map(r=>'<span class="tag">'+r+'</span>').join('')+'</div></div>').join('');
     }
     refreshAll();
+    setInterval(refreshAll, 3000);
+    function esc(v){return String(v ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
   </script>
 </body>
 </html>`
