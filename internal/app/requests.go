@@ -18,7 +18,7 @@ func (s *Server) parseVideoRequest(r *http.Request) (videoRequest, error) {
 		return s.parseMultipartVideoRequest(r, contentType)
 	}
 	var raw map[string]any
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&raw); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.MaxImageBytes+1)).Decode(&raw); err != nil {
 		return videoRequest{}, fmt.Errorf("invalid json body")
 	}
 	return videoRequestFromMap(raw), nil
@@ -37,16 +37,22 @@ func (s *Server) parseMultipartVideoRequest(r *http.Request, contentType string)
 	defer form.RemoveAll()
 
 	req := videoRequest{
-		Model:       formValue(form, "model"),
-		Prompt:      formValue(form, "prompt"),
-		AspectRatio: firstNonEmpty(formValue(form, "aspect_ratio"), formValue(form, "aspectRatio"), formValue(form, "size")),
-		Resolution:  formValue(form, "resolution"),
-		Seconds:     intValue(firstNonEmpty(formValue(form, "seconds"), formValue(form, "duration"))),
+		Model:  formValue(form, "model"),
+		Prompt: formValue(form, "prompt"),
+		N:      intValue(formValue(form, "n")),
 	}
-	for _, key := range []string{"image_urls", "imageUrls", "images", "image", "input_reference", "reference_images", "referenceImages"} {
+	extra := mapValue(formValue(form, "extra_fields"))
+	req.AspectRatio = firstNonEmpty(formValue(form, "aspect_ratio"), formValue(form, "aspectRatio"), formValue(form, "size"), stringValue(extra, "aspect_ratio"), stringValue(extra, "aspectRatio"), stringValue(extra, "ratio"), stringValue(extra, "size"))
+	req.Resolution = firstKnownResolution(formValue(form, "resolution"), stringValue(extra, "resolution"), formValue(form, "quality"), stringValue(extra, "quality"))
+	req.Seconds = numberValue(firstNonEmptyValue(formValue(form, "seconds"), formValue(form, "duration"), formValue(form, "video_seconds"), extra["seconds"], extra["duration"], extra["video_seconds"]))
+	if req.N <= 0 {
+		req.N = numberValue(extra["n"])
+	}
+	for _, key := range imageReferenceKeys() {
 		for _, value := range form.Value[key] {
 			req.ImageURLs = append(req.ImageURLs, imageURLsFromString(value)...)
 		}
+		req.ImageURLs = append(req.ImageURLs, imageURLsFromAny(extra[key])...)
 	}
 	for _, files := range form.File {
 		for _, fh := range files {
@@ -62,15 +68,18 @@ func (s *Server) parseMultipartVideoRequest(r *http.Request, contentType string)
 }
 
 func videoRequestFromMap(raw map[string]any) videoRequest {
+	extra := mapValue(raw["extra_fields"])
 	req := videoRequest{
-		Model:       stringValue(raw, "model"),
-		Prompt:      stringValue(raw, "prompt"),
-		AspectRatio: firstNonEmpty(stringValue(raw, "aspect_ratio"), stringValue(raw, "aspectRatio"), stringValue(raw, "size")),
-		Resolution:  stringValue(raw, "resolution"),
-		Seconds:     numberValue(firstNonNil(raw["seconds"], raw["duration"])),
+		Model:       firstNonEmpty(stringValue(raw, "model"), stringValue(extra, "model")),
+		Prompt:      firstNonEmpty(stringValue(raw, "prompt"), stringValue(extra, "prompt")),
+		AspectRatio: firstNonEmpty(stringValue(raw, "aspect_ratio"), stringValue(raw, "aspectRatio"), stringValue(raw, "size"), stringValue(extra, "aspect_ratio"), stringValue(extra, "aspectRatio"), stringValue(extra, "ratio"), stringValue(extra, "size")),
+		Resolution:  firstKnownResolution(stringValue(raw, "resolution"), stringValue(extra, "resolution"), stringValue(raw, "quality"), stringValue(extra, "quality")),
+		Seconds:     numberValue(firstNonEmptyValue(raw["seconds"], raw["duration"], raw["video_seconds"], extra["seconds"], extra["duration"], extra["video_seconds"])),
+		N:           numberValue(firstNonNil(raw["n"], extra["n"])),
 	}
-	for _, key := range []string{"image_urls", "imageUrls", "images", "image", "input_reference", "reference_images", "referenceImages"} {
+	for _, key := range imageReferenceKeys() {
 		req.ImageURLs = append(req.ImageURLs, imageURLsFromAny(raw[key])...)
+		req.ImageURLs = append(req.ImageURLs, imageURLsFromAny(extra[key])...)
 	}
 	req.ImageURLs = compactStrings(req.ImageURLs)
 	return req
@@ -91,6 +100,12 @@ func validateVideoRequest(req *videoRequest) error {
 	}
 	if req.Seconds <= 0 {
 		req.Seconds = 4
+	}
+	if req.N <= 0 {
+		req.N = 1
+	}
+	if req.N > 4 {
+		req.N = 4
 	}
 	if req.Seconds > spec.MaxSeconds {
 		req.Seconds = spec.MaxSeconds
@@ -153,7 +168,7 @@ func imageURLsFromAny(value any) []string {
 		}
 		return out
 	case map[string]any:
-		for _, key := range []string{"image_url", "url", "image", "input_image", "imageUrls", "image_urls"} {
+		for _, key := range imageReferenceKeys() {
 			if urls := imageURLsFromAny(item[key]); len(urls) > 0 {
 				return urls
 			}
@@ -173,7 +188,45 @@ func imageURLsFromString(value string) []string {
 			return imageURLsFromAny(decoded)
 		}
 	}
+	if !looksLikeImageReference(value) {
+		return nil
+	}
 	return []string{value}
+}
+
+func imageReferenceKeys() []string {
+	return []string{
+		"image_url", "imageUrl", "url",
+		"image_urls", "imageUrls",
+		"images", "image",
+		"input_image", "inputImage", "input_images", "inputImages",
+		"input_reference", "inputReference",
+		"reference_image", "referenceImage",
+		"reference_images", "referenceImages",
+		"reference_image_urls", "referenceImageUrls",
+		"content", "input",
+	}
+}
+
+func looksLikeImageReference(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "http://") ||
+		strings.HasPrefix(value, "https://") ||
+		strings.HasPrefix(value, "data:image/") ||
+		strings.HasPrefix(value, "data:application/octet-stream;base64,")
+}
+
+func mapValue(value any) map[string]any {
+	switch item := value.(type) {
+	case map[string]any:
+		return item
+	case string:
+		var out map[string]any
+		if json.Unmarshal([]byte(item), &out) == nil {
+			return out
+		}
+	}
+	return nil
 }
 
 func compactStrings(values []string) []string {
@@ -205,6 +258,16 @@ func stringValue(raw map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
+func firstKnownResolution(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "720p" || value == "480p" {
+			return value
+		}
+	}
+	return ""
+}
+
 func numberValue(value any) int {
 	switch item := value.(type) {
 	case float64:
@@ -227,6 +290,19 @@ func firstNonNil(values ...any) any {
 		if value != nil {
 			return value
 		}
+	}
+	return nil
+}
+
+func firstNonEmptyValue(values ...any) any {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+			continue
+		}
+		return value
 	}
 	return nil
 }

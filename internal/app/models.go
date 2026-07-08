@@ -40,7 +40,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 			"object":                   "model",
 			"created":                  0,
 			"owned_by":                 "grok-video-wrapper",
-			"supported_endpoint_types": []string{"videos"},
+			"supported_endpoint_types": []string{"images", "videos"},
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})

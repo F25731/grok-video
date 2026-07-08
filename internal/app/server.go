@@ -29,6 +29,8 @@ func NewServer(cfg Config) http.Handler {
 	mux.HandleFunc("/api/admin/status", s.withAdminAuth(s.adminStatus))
 	mux.HandleFunc("/v1/models", s.withAuth(s.models))
 	mux.HandleFunc("/v1/chat/completions", s.withAuth(s.chatCompletions))
+	mux.HandleFunc("/v1/images/generations", s.withAuth(s.imageGeneration))
+	mux.HandleFunc("/v1/images/edits", s.withAuth(s.imageGeneration))
 	mux.HandleFunc("/v1/videos", s.withAuth(s.createVideo))
 	mux.HandleFunc("/v1/videos/", s.withAuth(s.videoByID))
 	mux.HandleFunc("/v1/video/generations", s.withAuth(s.createVideo))

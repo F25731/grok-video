@@ -126,6 +126,7 @@ func toOpenAIFromCreate(req videoRequest, created upstreamCreateResp) openAIVide
 
 func toOpenAIFromTask(task upstreamTask, model string) openAIVideo {
 	status := strings.ToUpper(task.Status)
+	resultURL := task.ResultURLValue()
 	video := openAIVideo{
 		ID:        task.TaskID,
 		TaskID:    task.TaskID,
@@ -138,26 +139,56 @@ func toOpenAIFromTask(task upstreamTask, model string) openAIVideo {
 			"upstream_status": task.Status,
 		},
 	}
+	if video.ID == "" {
+		video.ID = task.ID
+		video.TaskID = task.ID
+	}
 	switch status {
 	case "SUCCESS":
 		video.Status = "completed"
 		video.Progress = 100
 		video.CompletedAt = time.Now().Unix()
-		if task.ResultURL != "" {
-			video.Metadata["url"] = task.ResultURL
-			video.Metadata["video_url"] = task.ResultURL
+		if resultURL != "" {
+			video.Metadata["url"] = resultURL
+			video.Metadata["video_url"] = resultURL
 		}
-	case "FAILURE", "FAILED", "TIMEOUT", "CANCELED", "CANCELLED":
+	case "FAILURE", "FAILED", "TIMEOUT", "CANCELED", "CANCELLED", "ERROR":
 		video.Status = "failed"
 		video.Progress = 100
 		video.CompletedAt = time.Now().Unix()
-		video.Error = &videoError{Message: firstNonEmpty(task.FailReason, "task failed"), Code: "upstream_failed"}
+		video.Error = &videoError{Message: firstNonEmpty(task.FailReason, task.ErrorMessage, "task failed"), Code: "upstream_failed"}
 	case "SUBMITTED", "QUEUED", "NOT_START":
 		video.Status = "queued"
-	case "IN_PROGRESS":
+	case "IN_PROGRESS", "PROCESSING", "RUNNING":
 		video.Status = "in_progress"
 	}
+	if video.Status != "completed" && resultURL != "" {
+		video.Status = "completed"
+		video.Progress = 100
+		video.CompletedAt = time.Now().Unix()
+		video.Metadata["url"] = resultURL
+		video.Metadata["video_url"] = resultURL
+	}
 	return video
+}
+
+func (t upstreamTask) ResultURLValue() string {
+	for _, value := range []string{t.ResultURL, t.VideoURL, t.URL} {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	if len(t.Output) > 0 && strings.TrimSpace(t.Output[0]) != "" {
+		return strings.TrimSpace(t.Output[0])
+	}
+	if t.Metadata != nil {
+		for _, key := range []string{"video_url", "url", "result_url"} {
+			if value, ok := t.Metadata[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
 }
 
 func (r upstreamCreateResp) CreatedAtOrNow() int64 {

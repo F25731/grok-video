@@ -4,6 +4,7 @@ type videoRequest struct {
 	Model       string
 	Prompt      string
 	Seconds     int
+	N           int
 	AspectRatio string
 	Resolution  string
 	ImageURLs   []string
@@ -47,8 +48,14 @@ type upstreamPollResp struct {
 
 type upstreamTask struct {
 	TaskID     string `json:"task_id"`
+	ID         string `json:"id"`
 	Status     string `json:"status"`
 	Progress   string `json:"progress"`
 	ResultURL  string `json:"result_url"`
+	URL        string `json:"url"`
+	VideoURL   string `json:"video_url"`
+	Output     []string `json:"output"`
+	Metadata   map[string]any `json:"metadata"`
 	FailReason string `json:"fail_reason"`
+	ErrorMessage string `json:"error_message"`
 }
