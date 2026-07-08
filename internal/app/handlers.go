@@ -42,7 +42,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	video := toOpenAIFromCreate(req, created)
 	s.tasks.Create(video)
-	go s.watchTask(created.TaskID)
+	go s.watchTask(created.TaskID.String())
 	writeJSON(w, http.StatusOK, video)
 }
 

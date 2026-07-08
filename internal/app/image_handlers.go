@@ -87,7 +87,7 @@ func (s *Server) createAndWaitVideo(ctx context.Context, req videoRequest) (stri
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
-		task, _, err := s.client.Poll(ctx, created.TaskID)
+		task, _, err := s.client.Poll(ctx, created.TaskID.String())
 		if err == nil {
 			video = toOpenAIFromTask(task, req.Model)
 			s.tasks.Update(video)
