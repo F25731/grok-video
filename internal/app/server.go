@@ -20,13 +20,15 @@ func NewServer(cfg Config) http.Handler {
 	if err != nil {
 		log.Fatalf("load runtime config failed: %v", err)
 	}
-	s := &Server{cfg: cfg, runtime: runtime, client: NewUpstreamClient(cfg, runtime), pool: NewWorkerPool(cfg.MaxWorkers, cfg.MaxQueue), tasks: NewTaskStore()}
+	s := &Server{cfg: cfg, runtime: runtime, client: NewUpstreamClient(cfg, runtime), pool: NewWorkerPool(cfg.MaxWorkers, cfg.MaxQueue), tasks: NewTaskStore(cfg.DataDir)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.health)
 	mux.HandleFunc("/admin", s.adminPage)
 	mux.HandleFunc("/api/admin/login", s.adminLogin)
 	mux.HandleFunc("/api/admin/config", s.withAdminAuth(s.adminConfig))
 	mux.HandleFunc("/api/admin/status", s.withAdminAuth(s.adminStatus))
+	mux.HandleFunc("/api/admin/tasks/stream", s.withAdminAuth(s.adminTaskStream))
+	mux.HandleFunc("/api/admin/tasks/preview", s.withAdminAuth(s.adminTaskPreview))
 	mux.HandleFunc("/v1/models", s.withAuth(s.models))
 	mux.HandleFunc("/v1/chat/completions", s.withAuth(s.chatCompletions))
 	mux.HandleFunc("/v1/images/generations", s.withAuth(s.imageGeneration))

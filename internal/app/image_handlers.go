@@ -83,7 +83,7 @@ func (s *Server) createAndWaitVideo(ctx context.Context, req videoRequest) (stri
 		return "", err
 	}
 	video := toOpenAIFromCreate(req, created)
-	s.tasks.Create(video)
+	s.tasks.Create(video, req)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {

@@ -84,7 +84,7 @@ On upstream failure or timeout, the wrapper returns an OpenAI-style error body s
 http://YOUR_SERVER:19484/admin
 ```
 
-The admin page configures the upstream API key and shows real task counts separately from worker HTTP job counts.
+The admin page configures the upstream API key, shows live task status through SSE, and keeps persisted task records in `/data/tasks.jsonl`. Completed records include task id, prompt, model, reference images, result URL, and a preview link for review.
 
 ## Env
 

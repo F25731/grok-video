@@ -1,7 +1,12 @@
 package app
 
 import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +17,12 @@ type TaskRecord struct {
 	Model       string         `json:"model"`
 	Status      string         `json:"status"`
 	Progress    int            `json:"progress"`
-	ResultURL    string         `json:"result_url,omitempty"`
+	Prompt      string         `json:"prompt,omitempty"`
+	AspectRatio string         `json:"aspect_ratio,omitempty"`
+	Resolution  string         `json:"resolution,omitempty"`
+	Seconds     int            `json:"seconds,omitempty"`
+	ImageURLs   []string       `json:"image_urls,omitempty"`
+	ResultURL   string         `json:"result_url,omitempty"`
 	Error       string         `json:"error,omitempty"`
 	CreatedAt   int64          `json:"created_at"`
 	UpdatedAt   int64          `json:"updated_at"`
@@ -22,15 +32,23 @@ type TaskRecord struct {
 }
 
 type TaskStore struct {
-	mu    sync.RWMutex
-	items map[string]*TaskRecord
+	mu          sync.RWMutex
+	items       map[string]*TaskRecord
+	path        string
+	subscribers map[chan []TaskRecord]struct{}
 }
 
-func NewTaskStore() *TaskStore {
-	return &TaskStore{items: map[string]*TaskRecord{}}
+func NewTaskStore(dataDir string) *TaskStore {
+	store := &TaskStore{
+		items:       map[string]*TaskRecord{},
+		path:        filepath.Join(dataDir, "tasks.jsonl"),
+		subscribers: map[chan []TaskRecord]struct{}{},
+	}
+	_ = store.load()
+	return store
 }
 
-func (s *TaskStore) Create(video openAIVideo) {
+func (s *TaskStore) Create(video openAIVideo, req videoRequest) {
 	if video.ID == "" {
 		return
 	}
@@ -39,17 +57,21 @@ func (s *TaskStore) Create(video openAIVideo) {
 	if createdAt <= 0 {
 		createdAt = now
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.items[video.ID] = &TaskRecord{
-		ID:        video.ID,
-		Model:     video.Model,
-		Status:    normalizeTaskStatus(video.Status),
-		Progress:  video.Progress,
-		CreatedAt: createdAt,
-		UpdatedAt: now,
-		Metadata:  video.Metadata,
+	record := &TaskRecord{
+		ID:          video.ID,
+		Model:       firstNonEmpty(video.Model, req.Model),
+		Status:      normalizeTaskStatus(video.Status),
+		Progress:    video.Progress,
+		Prompt:      req.Prompt,
+		AspectRatio: req.AspectRatio,
+		Resolution:  req.Resolution,
+		Seconds:     req.Seconds,
+		ImageURLs:   append([]string(nil), req.ImageURLs...),
+		CreatedAt:   createdAt,
+		UpdatedAt:   now,
+		Metadata:    video.Metadata,
 	}
+	s.upsert(record, true)
 }
 
 func (s *TaskStore) Update(video openAIVideo) {
@@ -58,7 +80,6 @@ func (s *TaskStore) Update(video openAIVideo) {
 	}
 	now := time.Now().Unix()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	item := s.items[video.ID]
 	if item == nil {
 		item = &TaskRecord{ID: video.ID, CreatedAt: firstPositive(video.CreatedAt, now)}
@@ -70,6 +91,9 @@ func (s *TaskStore) Update(video openAIVideo) {
 	item.UpdatedAt = now
 	item.Polls++
 	item.Metadata = video.Metadata
+	if video.Seconds != "" && item.Seconds <= 0 {
+		item.Seconds = atoi(video.Seconds)
+	}
 	if value, ok := video.Metadata["video_url"].(string); ok {
 		item.ResultURL = value
 	} else if value, ok := video.Metadata["url"].(string); ok {
@@ -81,6 +105,9 @@ func (s *TaskStore) Update(video openAIVideo) {
 	if video.CompletedAt > 0 {
 		item.CompletedAt = video.CompletedAt
 	}
+	snapshot := *item
+	s.mu.Unlock()
+	s.persistAndBroadcast(snapshot)
 }
 
 func (s *TaskStore) SetContentFetched(taskID string) {
@@ -89,10 +116,14 @@ func (s *TaskStore) SetContentFetched(taskID string) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if item := s.items[taskID]; item != nil {
 		item.UpdatedAt = time.Now().Unix()
+		snapshot := *item
+		s.mu.Unlock()
+		s.persistAndBroadcast(snapshot)
+		return
 	}
+	s.mu.Unlock()
 }
 
 func (s *TaskStore) ModelFor(taskID string) string {
@@ -138,6 +169,60 @@ func (s *TaskStore) Stats() map[string]any {
 func (s *TaskStore) Recent(limit int) []TaskRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.recentLocked(limit)
+}
+
+func (s *TaskStore) Subscribe(limit int) (chan []TaskRecord, func()) {
+	ch := make(chan []TaskRecord, 4)
+	s.mu.Lock()
+	s.subscribers[ch] = struct{}{}
+	ch <- s.recentLocked(limit)
+	s.mu.Unlock()
+	return ch, func() {
+		s.mu.Lock()
+		delete(s.subscribers, ch)
+		s.mu.Unlock()
+	}
+}
+
+func (s *TaskStore) upsert(record *TaskRecord, overwrite bool) {
+	s.mu.Lock()
+	if current := s.items[record.ID]; current != nil && !overwrite {
+		mergeTaskRecord(current, record)
+		record = current
+	} else if current := s.items[record.ID]; current != nil {
+		mergeTaskRecord(record, current)
+		s.items[record.ID] = record
+	} else {
+		s.items[record.ID] = record
+	}
+	snapshot := *record
+	s.mu.Unlock()
+	s.persistAndBroadcast(snapshot)
+}
+
+func (s *TaskStore) persistAndBroadcast(record TaskRecord) {
+	_ = s.append(record)
+	s.broadcast()
+}
+
+func (s *TaskStore) broadcast() {
+	s.mu.RLock()
+	snapshot := s.recentLocked(80)
+	subscribers := make([]chan []TaskRecord, 0, len(s.subscribers))
+	for ch := range s.subscribers {
+		subscribers = append(subscribers, ch)
+	}
+	s.mu.RUnlock()
+	for _, ch := range subscribers {
+		select {
+		case ch <- snapshot:
+		default:
+		}
+	}
+}
+
+func (s *TaskStore) recentLocked(limit int) []TaskRecord {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -154,11 +239,66 @@ func (s *TaskStore) Recent(limit int) []TaskRecord {
 	return items
 }
 
+func (s *TaskStore) load() error {
+	file, err := os.Open(s.path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	buffer := make([]byte, 64*1024)
+	scanner.Buffer(buffer, 2*1024*1024)
+	for scanner.Scan() {
+		var record TaskRecord
+		if json.Unmarshal(scanner.Bytes(), &record) == nil && record.ID != "" {
+			current := s.items[record.ID]
+			if current == nil || record.UpdatedAt >= current.UpdatedAt {
+				copy := record
+				s.items[record.ID] = &copy
+			}
+		}
+	}
+	return scanner.Err()
+}
+
+func (s *TaskStore) append(record TaskRecord) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(append(payload, '\n'))
+	return err
+}
+
+func mergeTaskRecord(dst, src *TaskRecord) {
+	dst.Model = firstNonEmpty(dst.Model, src.Model)
+	dst.Prompt = firstNonEmpty(dst.Prompt, src.Prompt)
+	dst.AspectRatio = firstNonEmpty(dst.AspectRatio, src.AspectRatio)
+	dst.Resolution = firstNonEmpty(dst.Resolution, src.Resolution)
+	if dst.Seconds <= 0 {
+		dst.Seconds = src.Seconds
+	}
+	if len(dst.ImageURLs) == 0 {
+		dst.ImageURLs = append([]string(nil), src.ImageURLs...)
+	}
+	if dst.CreatedAt <= 0 {
+		dst.CreatedAt = src.CreatedAt
+	}
+}
+
 func normalizeTaskStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "completed", "success", "succeeded", "done", "finished":
 		return "completed"
-	case "failed", "failure", "timeout", "canceled", "cancelled":
+	case "failed", "failure", "timeout", "canceled", "cancelled", "error":
 		return "failed"
 	case "in_progress", "running", "processing":
 		return "in_progress"
@@ -174,4 +314,9 @@ func firstPositive(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+func atoi(value string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(value))
+	return n
 }
